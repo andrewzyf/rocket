@@ -555,8 +555,13 @@ export class Car {
    */
   private startDodgeOrDoubleJump(input: CarInput): void {
     const magnitude = Math.abs(input.pitch) + Math.abs(input.roll) + Math.abs(input.yaw);
+    // The dodge direction only reads pitch and yaw. Holding air roll maps the
+    // horizontal stick to roll instead, so "air roll + sideways" clears the
+    // threshold with nothing to aim at; treat that as a plain double jump
+    // rather than burning the flip on a zero-length direction.
+    const aimless = Math.abs(input.pitch) < 1e-3 && Math.abs(input.yaw) < 1e-3;
 
-    if (magnitude < DODGE_INPUT_THRESHOLD) {
+    if (magnitude < DODGE_INPUT_THRESHOLD || aimless) {
       this.velocity = V.addScaled(this.velocity, this.up, JUMP_SPEED);
       this.dodgeTorque = V.zero();
       this.doubleJumped = true;
