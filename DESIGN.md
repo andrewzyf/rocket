@@ -51,9 +51,18 @@ This avoids a conversion layer entirely; the camera just uses `near = 10`, `far 
 | `+Y` | toward the **orange** goal |
 | `+Z` | up |
 
-Three.js is Y-up by default; we keep the **physics** in Z-up (so all the sourced constants
-are literal) and apply a single fixed Z-up→Y-up basis swap when writing transforms to
-render objects. See `src/render/frame.ts`.
+Three.js *defaults* to Y-up but does not require it, so the **scene is authored in the
+same Z-up frame as the physics** — `camera.up` is set to `(0, 0, 1)` and geometry is built
+Z-up. There is no conversion layer between simulation and render at all: a car's 3×3
+orientation matrix is copied straight into its object matrix. (Cylinder primitives are
+Y-aligned by construction, so those get a one-time `geometry.rotateX(π/2)`.)
+
+> Note: the physics uses a **right-handed** frame with body columns
+> `(forward, left, up)`. The published constants come from a left-handed engine. All
+> *magnitudes* below are taken from the sources verbatim; the *signs* are chosen so the
+> behaviour is correct by definition — steering right turns right, stick-forward pitches
+> the nose down — and are pinned by tests rather than by sign-chasing through two
+> handedness conventions.
 
 ---
 
@@ -566,14 +575,15 @@ and could be swapped.
 
 ```
 src/
-  core/        constants, math (vec3/mat3/quat), fixed-step clock, input mapping
-  physics/     field SDF, car controller, ball, world stepper, collision
-  entities/    car + ball + boost-pad game objects (physics state ↔ render state)
-  scenes/      arena construction, lighting, skybox, particles
+  core/        constants, math (vec3/mat3), input mapping and bindings
+  physics/     field SDF, car controller, ball, OBB collision, world stepper
+  entities/    car and ball render objects (simulation state -> scene graph)
+  scenes/      arena construction, palette, lighting, skybox, particle pool
   ai/          bot state machine + difficulty tiers
-  ui/          HUD, menus, settings, debug overlay
-  audio/       synthesised engine / boost / impact / crowd
-  game/        match state machine, camera, replay
+  ui/          HUD, menus, settings/controls, debug overlay, styles
+  audio/       synthesised engine / boost / impact / crowd / goal
+  game/        match state machine, chase camera, top-level orchestration
+tests/         69 tests: field, car, ball, world, match, bots, techniques
 ```
 
 ---
@@ -616,6 +626,74 @@ The research gets us close, not exact. Explicitly flagged as tuning targets:
 6. Bot reaction/aim constants — pure design.
 
 ---
+
+## 15. Playtest log — what actually changed after running it
+
+Written research got the model close; running it exposed six things the numbers alone
+did not. Each is a deviation from the sources, and each is commented at the site.
+
+**1. The throttle curve.** The reference `car.cc` implements forward drive as
+`throttle * (1550 − |v_f|)` gated at 1450 uu/s — but that whole function sits inside a
+disabled `#if 0` block, and it settles the car at 1450, not the published 1410. Replaced
+with the measured piecewise curve (1600 uu/s² at rest → 160 at 1400 → 0 at 1410). The two
+agree to within ~3% across the range, which is a useful cross-check that both are
+describing the same thing. **Observed:** 0→top speed in ~2.2 s on throttle alone;
+0→supersonic in ~1.9 s with boost. Boost from a standstill is noticeably punchier than
+boost at speed, which is the intended asymmetry.
+
+**2. Turn damping could add speed forever.** The published bracket
+`(−0.0719·|steer| − 0.0555·|ω| + 0.000626·|v_lat|) · v_f` has a *positive* lateral
+coefficient. Driving straight, the `7.83 · throttle` term in the lateral force pins a
+small standing sideways velocity, the bracket goes positive, and "damping" adds about
+0.5 uu/s every second — unbounded. Clamped the bracket at zero so it can only ever
+dissipate. **Observed:** top speed now holds at 1410 indefinitely instead of creeping.
+
+**3. Dodge vertical damping outlived the dodge.** The 35% z-damping is gated on
+`dodge_timer ≥ 0.15`, and the timer has to be cleared when the 0.65 s torque window ends.
+Missing that clear left the damping running on every subsequent tick, so a car fell at a
+terminal 15 uu/s. **Observed before the fix:** landing from a double jump took 13 seconds.
+
+**4. The ground snap cancelled jumps.** Wheel contact allows a 12 uu suspension band, and
+re-seating the car within that band undid the jump impulse before it could move the car
+(291.7 uu/s × 1/120 s = 2.4 uu of travel, well inside the band). Fixed by collapsing the
+band to zero whenever the car is moving away from the surface faster than 50 uu/s.
+
+**5. Cars could get stranded on their roof.** The wheel raycasts fire along the car's own
+down axis, so an inverted car never finds the floor and has no way to recover. Added an
+auto-right torque after 0.45 s at rest — long enough that a deliberate roof landing is
+still yours to save.
+
+**6. Demolitions killed the wrong car.** `destroy(victim, attacker)` was being called with
+the arguments in source order, so a supersonic attacker demolished *itself*. Found by a
+test, not by eye — it looked like the collision simply wasn't registering.
+
+### Feel checks that passed unchanged
+
+These were written down as targets before the code existed and needed no tuning:
+
+- **Turn radius**: ~145 uu at a crawl, ~1136 uu supersonic; a full-lock circle takes 3.1 s
+  and settles at ~1230 uu/s.
+- **Braking** at 3500 uu/s², **coasting** at 525 uu/s² — both measured within 3%.
+- **Air authority** roll > pitch > yaw, and rotation stops crisply on stick release.
+- **Bounce height** lands within a few percent of restitution² of drop height.
+- **Wall and ceiling driving**: at 2270 uu/s a car runs floor → ramp → wall → ceiling
+  continuously, and slides back down the wall when it runs out of speed.
+- **Wavedash**: lands at ~1930 uu/s against the 1410 throttle cap — a ~470 uu/s gain over
+  an identical car that just hops. Nothing in the code knows what a wavedash is.
+- **Half-flip and flip resets** both work as emergent consequences of the primitives.
+
+These are all locked down in `tests/mechanics.test.ts`, which is the most useful
+regression suite in the project: if a constant drifts, the named techniques break before
+anything more obvious does.
+
+### Still on the list
+
+- Handbrake grip and curvature multipliers are unpublished and remain tuned by feel.
+- The demolition angle band is quoted by the community as 55–90°, which taken literally
+  would forbid head-on demolitions. Only the 90° upper bound is enforced.
+- Ball friction is impulse-proportional, so a ball rolling flat with no vertical velocity
+  gets no friction at all and coasts on drag alone. That matches the reference model, and
+  matches how far the ball rolls in practice, but it is worth revisiting.
 
 ## Sources
 

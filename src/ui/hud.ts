@@ -7,7 +7,7 @@
  * layout work is CSS rather than hand-rolled measurement.
  */
 
-import { CAR_MAX_SPEED, TEAM_NAMES } from '../core/constants';
+import { TEAM_NAMES } from '../core/constants';
 import { clamp } from '../core/math';
 
 const RADIUS = 62;
@@ -106,15 +106,14 @@ export class Hud {
     this.boostBox.classList.toggle('empty', rounded <= 0);
   }
 
-  /** `speed` in uu/s; displayed in km/h, since 1 uu = 1 cm. */
+  /** `speed` is in uu/s. 1 uu = 1 cm, so 1 uu/s = 0.036 km/h. */
   setSpeed(speed: number, supersonic: boolean): void {
-    const kmh = Math.round((speed * 0.036) / 1) ;
+    const kmh = Math.round(speed * 0.036);
     if (kmh !== this.lastSpeed) {
       this.speedBox.textContent = `${kmh} KM/H`;
       this.lastSpeed = kmh;
     }
     this.speedBox.classList.toggle('supersonic', supersonic);
-    void CAR_MAX_SPEED;
   }
 
   showBanner(headline: string, sub = '', team?: number): void {

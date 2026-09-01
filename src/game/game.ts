@@ -14,6 +14,7 @@ import {
   BALL_COLLISION_RADIUS,
   BODY_TYPES,
   DEFAULT_BODY,
+  DRIVE_SPEED,
   MAX_TICKS_PER_FRAME,
   SUPERSONIC_THRESHOLD,
   TEAM_COLORS,
@@ -255,8 +256,10 @@ export class Game {
 
     if (this.running && !this.paused) {
       this.simulate(dt, raw);
-    } else {
-      // Idle camera orbit behind the menu.
+    } else if (!this.running) {
+      // Idle orbit behind the menu. A paused match keeps the camera exactly
+      // where it was -- swinging away to an orbit loses the player's read on
+      // the play they are about to resume.
       this.idleCamera(dt);
     }
 
@@ -495,11 +498,10 @@ export class Game {
 
   private updateAudio(): void {
     const car = this.player;
-    const raw = this.botInputs.get(car);
     this.audio.updateEngine(
       clamp(car.speed / SUPERSONIC_THRESHOLD, 0, 1.2),
-      Math.abs(car.forwardSpeed) / 1410,
-      car.boost > 0 && (raw?.boost ?? this.input.isDown('boost')),
+      Math.abs(car.forwardSpeed) / DRIVE_SPEED,
+      car.boost > 0 && this.input.isDown('boost'),
       !car.onGround,
     );
 
