@@ -1,9 +1,9 @@
-name: Deploy to GitHub Pages
+name: Deploy Vite to GitHub Pages
 
 on:
   push:
     branches:
-      - claude/rocket-car-soccer-game-yxf6w # your branch name
+      - claude/rocket-car-soccer-game-yxf6w
   workflow_dispatch:
 
 permissions:
